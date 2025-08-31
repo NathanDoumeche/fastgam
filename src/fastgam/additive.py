@@ -97,3 +97,43 @@ def gam_predict(x_test, hat_theta, d, m,threshold):
     for i in range(d):
         estimator += np.real(NUFFT_inv_cpu(x_test[i], hat_theta[(2*m+1)*i:(2*m+1)*(i+1)], threshold))
     return estimator
+
+def grid_search(x_gpu, y_gpu, x_val, y_val, d, m, threshold, lambda_N_list):
+    M = 2*m+1
+    err_val = np.inf
+    N_val = x_val.shape[1]
+
+    cov_y = np.empty(d * M,  dtype=np.complex128)
+    for i in range(d):
+        cov_y[i*M:(i+1)*M] = NUFFT_Y_cpu(x_gpu[i], y_gpu, m, threshold)
+
+    cov_x = np.empty((d * M, d * M),  dtype=np.complex128)
+
+    for i1 in range(d):
+        for i2 in range(i1, d):
+            cov_x[i1*M:(i1+1)*M, i2*M:(i2+1)*M] = kernel_vect_cpu(x_gpu[i1], -x_gpu[i2], m, threshold)
+
+            if i1 != i2:
+                # Assign Hermitian symmetric block (i2, i1)
+                cov_x[i2*M:(i2+1)*M, i1*M:(i1+1)*M] = (cov_x[i1*M:(i1+1)*M, i2*M:(i2+1)*M]).conj().T
+
+
+    for lambda_n in lambda_N_list:
+        A_funct = lambda x: A_function(x, lambda_n, cov_x)
+
+        if lambda_n == lambda_N_list[0]:
+            hat_theta = conjugate_gradient_cpu(A_funct, cov_y, cov_y, threshold, display=False).astype(np.complex128)
+        else:
+            hat_theta = conjugate_gradient_cpu(A_funct, cov_y, cov_y, threshold, display=False).astype(np.complex128)
+        
+        estimator_val = np.zeros(N_val)
+        for i in range(d):
+            estimator_val += np.real(NUFFT_inv_cpu(x_val[i], hat_theta[(2*m+1)*i:(2*m+1)*(i+1)], threshold))
+
+        error = estimator_val-y_val
+        mse = np.mean(np.square(np.abs(error)))
+        if mse <err_val:
+            err_val = mse
+            hat_theta_val = hat_theta
+
+    return hat_theta_val
